@@ -2,57 +2,48 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Commission Engine v2.1 - Grouped Streams</title>
+    <title>Commission Engine v2.2 - Stream Detail</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
     <style>
         body { font-family: 'Segoe UI', Tahoma, sans-serif; margin: 30px; background-color: #f0f2f5; }
         .panel { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); margin-bottom: 20px; }
-        .mapping-area { background: #fff3cd; border: 1px solid #ffeeba; padding: 15px; border-radius: 8px; margin-top: 15px; }
-        .mapping-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; max-width: 700px; margin-top: 10px; }
         .unit-card { background: white; border-radius: 8px; padding: 20px; margin-bottom: 25px; border-left: 6px solid #28a745; }
-        table { width: 100%; border-collapse: collapse; margin-top: 15px; }
-        th, td { border: 1px solid #e9ecef; padding: 10px; text-align: left; font-size: 0.85em; }
-        th { background-color: #f8f9fa; }
-        .disqualified { color: #dc3545; background-color: #fffafa; }
-        .version-tag { float: right; font-size: 0.9em; color: #444; font-weight: bold; background: #eee; padding: 2px 8px; border-radius: 4px; }
-        button { padding: 10px 20px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: bold; }
+        table { width: 100%; border-collapse: collapse; margin-top: 15px; background: white; }
+        th, td { border: 1px solid #dee2e6; padding: 8px 12px; text-align: left; font-size: 0.85em; }
+        th { background-color: #f8f9fa; position: sticky; top: 0; }
+        .stream-row { color: #666; font-style: italic; background-color: #fdfdfd; }
+        .total-row { background-color: #e9ecef; font-weight: bold; border-top: 2px solid #dee2e6; }
+        .disqualified { color: #dc3545; }
+        .version-tag { float: right; font-weight: bold; background: #333; color: #fff; padding: 2px 10px; border-radius: 4px; }
+        button { padding: 10px 20px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; }
     </style>
 </head>
 <body>
 
 <div class="panel">
-    <div class="version-tag">Build: <span id="versionNum">2.1</span></div>
-    <h2>Commission Engine: Individual Stream Totals</h2>
+    <div class="version-tag">Build: 2.2</div>
+    <h2>Commission Engine: Stream Breakdown</h2>
     
-    <div style="margin-bottom: 15px;">
-        <label><strong>1. Target Commission Midpoint (R):</strong></label><br>
-        <input type="number" id="manualTargetComm" value="1000" style="padding:8px; width: 200px;">
+    <div style="display: flex; gap: 20px; margin-bottom: 15px; align-items: flex-end;">
+        <div>
+            <label><strong>Target Commission Midpoint (R):</strong></label><br>
+            <input type="number" id="manualTargetComm" value="1000" style="padding:8px;">
+        </div>
+        <div>
+            <input type="file" id="fileInput" accept=".xlsx, .xls" />
+        </div>
+        <button id="processBtn">Calculate Report</button>
     </div>
 
-    <div>
-        <label><strong>2. Upload File:</strong></label><br>
-        <input type="file" id="fileInput" accept=".xlsx, .xls" />
-    </div>
-
-    <div id="mappingArea" class="mapping-area" style="display:none;">
-        <strong>3. Map Your Columns:</strong>
-        <div class="mapping-grid">
-            <label>Person Number (ID):</label>
+    <div id="mappingArea" style="display:none; background: #fff3cd; padding: 15px; border-radius: 8px;">
+        <strong>Verify Mapping:</strong>
+        <div style="display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; margin-top: 10px;">
             <select id="mapID"></select>
-            
-            <label>Full Name:</label>
             <select id="mapName"></select>
-            
-            <label>Organisational Unit:</label>
             <select id="mapUnit"></select>
-            
-            <label>Actual Sales (per stream):</label>
             <select id="mapActual"></select>
-            
-            <label>Target Sales (per stream):</label>
             <select id="mapTarget"></select>
         </div>
-        <button id="processBtn" style="margin-top: 15px;">Calculate & Render Report</button>
     </div>
 </div>
 
@@ -61,12 +52,26 @@
 
 <script>
     let currentWorkbook = null;
-    let buildVersion = 2.1;
 
+    // Aggressive cleaner for mixed decimal formats (1.234,56 or 1,234.56)
     function cleanNum(val) {
-        if (val === undefined || val === null) return 0;
+        if (val === undefined || val === null || val === "") return 0;
         if (typeof val === 'number') return val;
-        let str = val.toString().replace(/[R\s,]/g, '');
+        
+        let str = val.toString().replace(/[R\s]/g, ''); // Remove R and spaces
+        
+        // If there are both commas and dots, remove the thousands separator
+        if (str.includes(',') && str.includes('.')) {
+            if (str.lastIndexOf('.') > str.lastIndexOf(',')) {
+                str = str.replace(/,/g, ''); // Dot is decimal
+            } else {
+                str = str.replace(/\./g, '').replace(',', '.'); // Comma is decimal
+            }
+        } else {
+            // If only comma exists, treat as decimal
+            str = str.replace(',', '.');
+        }
+        
         return parseFloat(str) || 0;
     }
 
@@ -74,8 +79,7 @@
         if (target <= 0) return 0;
         const ach = (actual / target) * 100;
         if (ach < 80) return 0;
-        if (ach >= 130) return 0.05;
-        return 0.02 + (Math.floor(ach) - 80) * 0.0006;
+        return Math.min(0.05, 0.02 + (Math.floor(ach) - 80) * 0.0006);
     }
 
     document.getElementById('fileInput').addEventListener('change', function(e) {
@@ -83,13 +87,12 @@
         reader.onload = (event) => {
             const data = new Uint8Array(event.target.result);
             currentWorkbook = XLSX.read(data, {type: 'array'});
-            const firstDataSheet = currentWorkbook.SheetNames.find(n => n !== "Summary");
-            const headers = XLSX.utils.sheet_to_json(currentWorkbook.Sheets[firstDataSheet], {header: 1})[0];
+            const firstSheet = currentWorkbook.SheetNames.find(n => n !== "Summary");
+            const headers = XLSX.utils.sheet_to_json(currentWorkbook.Sheets[firstSheet], {header: 1})[0];
             
-            const selects = ['mapID', 'mapName', 'mapUnit', 'mapActual', 'mapTarget'];
-            selects.forEach(id => {
+            ['mapID', 'mapName', 'mapUnit', 'mapActual', 'mapTarget'].forEach(id => {
                 const el = document.getElementById(id);
-                el.innerHTML = '<option value="">-- Select --</option>';
+                el.innerHTML = '';
                 headers.forEach(h => el.innerHTML += `<option value="${h}">${h}</option>`);
             });
             document.getElementById('mappingArea').style.display = 'block';
@@ -98,6 +101,7 @@
     });
 
     document.getElementById('processBtn').addEventListener('click', function() {
+        if(!currentWorkbook) return;
         const map = {
             id: document.getElementById('mapID').value,
             name: document.getElementById('mapName').value,
@@ -109,10 +113,6 @@
         const summary = currentWorkbook.Sheets["Summary"];
         document.getElementById('reportHeader').innerText = (summary && summary["A1"]) ? summary["A1"].v : "Commission Report";
         
-        runCalculations(map);
-    });
-
-    function runCalculations(map) {
         const output = document.getElementById('output');
         const manualTarget = cleanNum(document.getElementById('manualTargetComm').value);
         output.innerHTML = "";
@@ -121,9 +121,8 @@
             if (sheetName === "Summary") return;
             const rows = XLSX.utils.sheet_to_json(currentWorkbook.Sheets[sheetName]);
             
-            // Step 1: Group data by Organisational Unit
             const unitGroups = rows.reduce((acc, row) => {
-                if (!row[map.id] || row[map.id] == 0) return acc;
+                if (!row[map.id]) return acc;
                 const uName = row[map.unit] || "Unassigned";
                 if (!acc[uName]) acc[uName] = [];
                 acc[uName].push(row);
@@ -131,62 +130,67 @@
             }, {});
 
             for (const unit in unitGroups) {
-                processUnit(unit, unitGroups[unit], map, manualTarget);
+                renderUnit(unit, unitGroups[unit], map, manualTarget);
             }
         });
-    }
+    });
 
-    function processUnit(uName, unitRows, map, manualTarget) {
-        // Step 2: Group by Individual inside the Unit (Summing multiple streams)
-        const individuals = unitRows.reduce((acc, row) => {
+    function renderUnit(uName, unitRows, map, manualTarget) {
+        // Group by person to calculate totals/eligibility
+        const personData = unitRows.reduce((acc, row) => {
             const id = row[map.id];
-            if (!acc[id]) {
-                acc[id] = { name: row[map.name] || "Unknown", id: id, totalAct: 0, totalTar: 0 };
-            }
-            acc[id].totalAct += cleanNum(row[map.act]);
-            acc[id].totalTar += cleanNum(row[map.tar]);
+            if (!acc[id]) acc[id] = { name: row[map.name], streams: [], tAct: 0, tTar: 0 };
+            const a = cleanNum(row[map.act]);
+            const t = cleanNum(row[map.tar]);
+            acc[id].streams.push({ a, t });
+            acc[id].tAct += a;
+            acc[id].tTar += t;
             return acc;
         }, {});
 
-        const peopleArray = Object.values(individuals);
-        let teamAct = 0, teamTar = 0;
-
-        peopleArray.forEach(p => {
-            teamAct += p.totalAct;
-            teamTar += p.totalTar;
-            p.achPct = p.totalTar > 0 ? (p.totalAct / p.totalTar) : 0;
-            p.isEligible = p.achPct >= 0.75;
-            // Weighted Score = Revenue * Achievement%
-            p.weight = p.isEligible ? (p.totalAct * p.achPct) : 0;
+        const people = Object.values(personData);
+        let unitAct = 0, unitTar = 0;
+        people.forEach(p => { 
+            unitAct += p.tAct; unitTar += p.tTar;
+            p.ach = p.tTar > 0 ? (p.tAct / p.tTar) : 0;
+            p.eligible = p.ach >= 0.75;
+            p.weight = p.eligible ? (p.tAct * p.ach) : 0;
         });
 
-        const rate = getAnnexureCRate(teamAct, teamTar);
-        const teamPool = teamTar > 0 ? Math.max(0, teamAct - (teamTar * 0.8)) * rate : 0;
-        const totalTeamWeight = peopleArray.reduce((sum, p) => sum + p.weight, 0);
+        const rate = getAnnexureCRate(unitAct, unitTar);
+        const pool = unitTar > 0 ? Math.max(0, unitAct - (unitTar * 0.8)) * rate : 0;
+        const totalW = people.reduce((s, p) => s + p.weight, 0);
 
-        // UI Creation
         const card = document.createElement('div');
         card.className = 'unit-card';
         card.innerHTML = `<h3>Unit: ${uName}</h3>
-            <p>Team Revenue: R${teamAct.toFixed(2)} | Pool: <b>R${teamPool.toFixed(2)}</b> (${(rate*100).toFixed(2)}%)</p>
+            <p>Pool Rate: ${(rate*100).toFixed(2)}% | Total Pool: R${pool.toFixed(2)}</p>
             <table>
-                <tr>
-                    <th>Pers.No.</th><th>Name</th><th>Total Actual</th><th>Total Target</th><th>Achieve%</th><th>Weight</th><th>Commission</th>
-                </tr>`;
+                <tr><th>Pers.No / Name</th><th>Actual</th><th>Target</th><th>Achieve%</th><th>Share</th></tr>`;
 
-        peopleArray.forEach(p => {
-            let share = (p.isEligible && totalTeamWeight > 0) ? (p.weight / totalTeamWeight) * teamPool : 0;
-            if (share > (manualTarget * 3.1)) share = manualTarget * 3.1;
+        people.forEach(p => {
+            // First list individual streams
+            p.streams.forEach((s, idx) => {
+                card.querySelector('table').innerHTML += `
+                    <tr class="stream-row">
+                        <td>${idx === 0 ? p.name + ' (' + p.id + ')' : ''}</td>
+                        <td>R${s.a.toFixed(2)}</td>
+                        <td>R${s.t.toFixed(2)}</td>
+                        <td>-</td><td>-</td>
+                    </tr>`;
+            });
+
+            // Then the totals row for that person
+            let share = (p.eligible && totalW > 0) ? (p.weight / totalW) * pool : 0;
+            if (share > manualTarget * 3.1) share = manualTarget * 3.1;
 
             card.querySelector('table').innerHTML += `
-                <tr class="${!p.isEligible ? 'disqualified' : ''}">
-                    <td>${p.id}</td>
-                    <td>${p.name}</td>
-                    <td>R${p.totalAct.toFixed(2)}</td>
-                    <td>R${p.totalTar.toFixed(2)}</td>
-                    <td>${(p.achPct * 100).toFixed(1)}%</td>
-                    <td>${p.weight.toFixed(2)}</td>
-                    <td><b>R${share.toFixed(2)}</b></td>
+                <tr class="total-row ${!p.eligible ? 'disqualified' : ''}">
+                    <td>TOTAL FOR ${p.name}</td>
+                    <td>R${p.tAct.toFixed(2)}</td>
+                    <td>R${p.tTar.toFixed(2)}</td>
+                    <td>${(p.ach * 100).toFixed(1)}%</td>
+                    <td>R${share.toFixed(2)} ${!p.eligible ? '(Fail 75%)' : ''}</td>
                 </tr>`;
         });
         document.getElementById('output').appendChild(card);
