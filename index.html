@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Commission Engine - Monthly Report</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, sans-serif; margin: 30px; background-color: #f0f2f5; }
+        .config-panel { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); margin-bottom: 20px; }
+        #reportHeader { text-align: center; color: #2c3e50; margin-bottom: 30px; text-transform: uppercase; letter-spacing: 1px; }
+        .unit-card { background: white; border-radius: 8px; padding: 20px; margin-bottom: 25px; border-left: 6px solid #28a745; box-shadow: 0 2px 5px rgba(0,0,0,0.05); }
+        table { width: 100%; border-collapse: collapse; margin-top: 15px; }
+        th, td { border: 1px solid #e9ecef; padding: 12px; text-align: left; }
+        th { background-color: #f8f9fa; font-weight: 600; font-size: 0.9em; }
+        .disqualified { background-color: #fff5f5; color: #dc3545; font-style: italic; }
+        .stat-grid { display: flex; gap: 15px; margin-bottom: 15px; }
+        .stat-item { background: #e7f1ff; padding: 10px; border-radius: 5px; flex: 1; font-size: 0.85em; }
+        .btn-group { display: flex; gap: 10px; align-items: center; }
+        button { padding: 10px 20px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; }
+    </style>
+</head>
+<body>
+
+<div class="config-panel">
+    <h2>Data Extraction & Commission Engine</h2>
+    <div class="stat-grid">
+        <div>
+            <label><strong>Target Commission Midpoint:</strong></label><br>
+            <input type="number" id="manualTargetComm" value="1000" style="padding: 8px; border-radius: 4px; border: 1px solid #ccc;">
+        </div>
+        <div class="btn-group">
+            <input type="file" id="fileInput" accept=".xlsx, .xls" />
+            <button id="downloadBtn" style="display:none; background: #28a745;">Download Excel Report</button>
+        </div>
+    </div>
+</div>
+
+<h1 id="reportHeader"></h1>
+<div id="output"></div>
+
+<script>
+    let finalExportData = [];
+
+    // Annexure C Lookup
+    function getAnnexureCRate(actual, target) {
+        const achievement = (actual / target) * 100;
+        if (achievement < 80) return 0;
+        if (achievement >= 130) return 0.05;
+        const steps = Math.floor(achievement) - 80;
+        return 0.02 + (steps * 0.0006);
+    }
+
+    document.getElementById('fileInput').addEventListener('change', function(e) {
+        const reader = new FileReader();
+        reader.onload = (event) => {
+            const data = new Uint8Array(event.target.result);
+            const workbook = XLSX.read(data, {type: 'array'});
+            
+            // Extract Month from Summary Tab Cell A1
+            extractReportHeading(workbook);
+            
+            processExcel(workbook);
+        };
+        reader.readAsArrayBuffer(e.target.files[0]);
+    });
+
+    function extractReportHeading(workbook) {
+        const headerEl = document.getElementById('reportHeader');
+        const summarySheet = workbook.Sheets["Summary"];
+        
+        if (summarySheet && summarySheet["A1"]) {
+            headerEl.innerText = "Commission Report: " + summarySheet["A1"].v;
+        } else {
+            headerEl.innerText = "Commission Report (Month Not Found in Summary!A1)";
+        }
+    }
+
+    function processExcel(workbook) {
+        const output = document.getElementById('output');
+        const manualTargetComm = parseFloat(document.getElementById('manualTargetComm').value) || 0;
+        output.innerHTML = "";
+        finalExportData = [];
+
+        workbook.SheetNames.forEach(sheetName => {
+            // Skip the Summary tab for data processing
+            if (sheetName === "Summary") return;
+
+            const data = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName]);
+            const filtered = data.filter(row => row['Pers.No.'] != 0 && row['Pers.No.'] != undefined);
+
+            const units = filtered.reduce((acc, row) => {
+                const uName = row['Short Text of Organisational Unit'] || "Unassigned";
+                if (!acc[uName]) acc[uName] = [];
+                acc[uName].push(row);
+                return acc;
+            }, {});
+
+            for (const unit in units) {
+                calculateAndRender(unit, units[unit], manualTargetComm);
+            }
+        });
+        document.getElementById('downloadBtn').style.display = 'block';
+    }
+
+    function calculateAndRender(unitName, members, manualTarget) {
+        let teamAct = 0, teamTar = 0;
+        members.forEach(m => {
+            teamAct += parseFloat(m['Actual']) || 0;
+            teamTar += parseFloat(m['Target']) || 0;
+        });
+
+        const rate = getAnnexureCRate(teamAct, teamTar);
+        const teamPool = Math.max(0, teamAct - (teamTar * 0.8)) * rate;
+
+        let totalWeightedScore = 0;
+        const processed = members.map(m => {
+            const act = parseFloat(m['Actual']) || 0;
+            const tar = parseFloat(m['Target']) || 0;
+            const achieve = tar > 0 ? (act / tar) : 0;
+            const isEligible = achieve >= 0.75;
+            const weight = isEligible ? (act * achieve) : 0;
+            totalWeightedScore += weight;
+            return { ...m, act, tar, achieve, isEligible, weight };
+        });
+
+        const card = document.createElement('div');
+        card.className = 'unit-card';
+        card.innerHTML = `<h3>Unit: ${unitName}</h3>
+            <div class="stat-grid">
+                <div class="stat-item">Team Achievement: <strong>${((teamAct/teamTar)*100).toFixed(1)}%</strong></div>
+                <div class="stat-item">Pool Rate: <strong>${(rate*100).toFixed(2)}%</strong></div>
+                <div class="stat-item">Total Pool: <strong>$${teamPool.toFixed(2)}</strong></div>
+            </div>`;
+
+        let table = `<table><tr><th>Pers.No.</th><th>Actual</th><th>Target</th><th>Achieve%</th><th>Share</th></tr>`;
+
+        processed.forEach(m => {
+            let share = 0;
+            if (m.isEligible && totalWeightedScore > 0) {
+                share = Math.min((m.weight / totalWeightedScore) * teamPool, manualTarget * 3.1);
+            }
+
+            table += `<tr class="${!m.isEligible ? 'disqualified' : ''}">
+                <td>${m['Pers.No.']}</td>
+                <td>${m.act.toFixed(2)}</td>
+                <td>${m.tar.toFixed(2)}</td>
+                <td>${(m.achieve * 100).toFixed(1)}%</td>
+                <td><strong>$${share.toFixed(2)}</strong> ${!m.isEligible ? '(Below 75%)' : ''}</td>
+            </tr>`;
+
+            finalExportData.push({
+                "Report Month": document.getElementById('reportHeader').innerText.replace('Commission Report: ', ''),
+                "Unit": unitName,
+                "Pers.No.": m['Pers.No.'],
+                "Achievement %": (m.achieve * 100).toFixed(1),
+                "Eligible": m.isEligible ? "Yes" : "No",
+                "Final Commission": share.toFixed(2)
+            });
+        });
+
+        card.innerHTML += table + `</table>`;
+        document.getElementById('output').appendChild(card);
+    }
+
+    document.getElementById('downloadBtn').addEventListener('click', () => {
+        const ws = XLSX.utils.json_to_sheet(finalExportData);
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, "Monthly Summary");
+        XLSX.writeFile(wb, "Commission_Report.xlsx");
+    });
+</script>
+</body>
+</html>
