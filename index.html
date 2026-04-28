@@ -2,27 +2,27 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Commission Engine v2.0 - Manual Mapping</title>
+    <title>Commission Engine v2.1 - Grouped Streams</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
     <style>
         body { font-family: 'Segoe UI', Tahoma, sans-serif; margin: 30px; background-color: #f0f2f5; }
         .panel { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); margin-bottom: 20px; }
-        .mapping-area { display: none; background: #fff3cd; border: 1px solid #ffeeba; padding: 15px; border-radius: 8px; margin-top: 15px; }
-        .mapping-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; max-width: 600px; margin-top: 10px; }
+        .mapping-area { background: #fff3cd; border: 1px solid #ffeeba; padding: 15px; border-radius: 8px; margin-top: 15px; }
+        .mapping-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; max-width: 700px; margin-top: 10px; }
         .unit-card { background: white; border-radius: 8px; padding: 20px; margin-bottom: 25px; border-left: 6px solid #28a745; }
         table { width: 100%; border-collapse: collapse; margin-top: 15px; }
-        th, td { border: 1px solid #e9ecef; padding: 10px; text-align: left; font-size: 0.9em; }
+        th, td { border: 1px solid #e9ecef; padding: 10px; text-align: left; font-size: 0.85em; }
+        th { background-color: #f8f9fa; }
         .disqualified { color: #dc3545; background-color: #fffafa; }
-        .version-tag { float: right; font-size: 0.8em; color: #666; font-weight: normal; }
-        select { padding: 5px; width: 100%; border-radius: 4px; }
-        button { padding: 10px 20px; background: #28a745; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: bold; }
+        .version-tag { float: right; font-size: 0.9em; color: #444; font-weight: bold; background: #eee; padding: 2px 8px; border-radius: 4px; }
+        button { padding: 10px 20px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: bold; }
     </style>
 </head>
 <body>
 
 <div class="panel">
-    <div class="version-tag">Build: <span id="versionNum">1.0</span></div>
-    <h2>Commission Allocation Engine</h2>
+    <div class="version-tag">Build: <span id="versionNum">2.1</span></div>
+    <h2>Commission Engine: Individual Stream Totals</h2>
     
     <div style="margin-bottom: 15px;">
         <label><strong>1. Target Commission Midpoint (R):</strong></label><br>
@@ -34,23 +34,25 @@
         <input type="file" id="fileInput" accept=".xlsx, .xls" />
     </div>
 
-    <div id="mappingArea" class="mapping-area">
+    <div id="mappingArea" class="mapping-area" style="display:none;">
         <strong>3. Map Your Columns:</strong>
-        <p style="font-size: 0.85em; margin: 5px 0;">We found headers! Tell us which one is which:</p>
         <div class="mapping-grid">
-            <label>Person Number / ID:</label>
+            <label>Person Number (ID):</label>
             <select id="mapID"></select>
+            
+            <label>Full Name:</label>
+            <select id="mapName"></select>
             
             <label>Organisational Unit:</label>
             <select id="mapUnit"></select>
             
-            <label>Actual Sales (Revenue):</label>
+            <label>Actual Sales (per stream):</label>
             <select id="mapActual"></select>
             
-            <label>Target Sales:</label>
+            <label>Target Sales (per stream):</label>
             <select id="mapTarget"></select>
         </div>
-        <button id="processBtn" style="margin-top: 15px; background: #007bff;">Run Commission Calculation</button>
+        <button id="processBtn" style="margin-top: 15px;">Calculate & Render Report</button>
     </div>
 </div>
 
@@ -59,23 +61,21 @@
 
 <script>
     let currentWorkbook = null;
-    let buildVersion = 1.0;
-    let finalData = [];
+    let buildVersion = 2.1;
 
-    // Utility: Clean number strings
     function cleanNum(val) {
-        if (!val) return 0;
+        if (val === undefined || val === null) return 0;
         if (typeof val === 'number') return val;
-        return parseFloat(val.toString().replace(/[R\s,]/g, '')) || 0;
+        let str = val.toString().replace(/[R\s,]/g, '');
+        return parseFloat(str) || 0;
     }
 
-    // Annexure C Logic
     function getAnnexureCRate(actual, target) {
         if (target <= 0) return 0;
-        const achieve = (actual / target) * 100;
-        if (achieve < 80) return 0;
-        if (achieve >= 130) return 0.05;
-        return 0.02 + (Math.floor(achieve) - 80) * 0.0006;
+        const ach = (actual / target) * 100;
+        if (ach < 80) return 0;
+        if (ach >= 130) return 0.05;
+        return 0.02 + (Math.floor(ach) - 80) * 0.0006;
     }
 
     document.getElementById('fileInput').addEventListener('change', function(e) {
@@ -83,120 +83,113 @@
         reader.onload = (event) => {
             const data = new Uint8Array(event.target.result);
             currentWorkbook = XLSX.read(data, {type: 'array'});
-            
-            // Get headers from the first data sheet (skipping Summary)
             const firstDataSheet = currentWorkbook.SheetNames.find(n => n !== "Summary");
-            const sheet = currentWorkbook.Sheets[firstDataSheet];
-            const headers = XLSX.utils.sheet_to_json(sheet, {header: 1})[0];
+            const headers = XLSX.utils.sheet_to_json(currentWorkbook.Sheets[firstDataSheet], {header: 1})[0];
             
-            populateSelectors(headers);
+            const selects = ['mapID', 'mapName', 'mapUnit', 'mapActual', 'mapTarget'];
+            selects.forEach(id => {
+                const el = document.getElementById(id);
+                el.innerHTML = '<option value="">-- Select --</option>';
+                headers.forEach(h => el.innerHTML += `<option value="${h}">${h}</option>`);
+            });
             document.getElementById('mappingArea').style.display = 'block';
         };
         reader.readAsArrayBuffer(e.target.files[0]);
     });
 
-    function populateSelectors(headers) {
-        const selects = ['mapID', 'mapUnit', 'mapActual', 'mapTarget'];
-        selects.forEach(id => {
-            const el = document.getElementById(id);
-            el.innerHTML = '<option value="">-- Select Column --</option>';
-            headers.forEach(h => {
-                el.innerHTML += `<option value="${h}">${h}</option>`;
-            });
-        });
-    }
-
     document.getElementById('processBtn').addEventListener('click', function() {
-        const mapping = {
+        const map = {
             id: document.getElementById('mapID').value,
+            name: document.getElementById('mapName').value,
             unit: document.getElementById('mapUnit').value,
             act: document.getElementById('mapActual').value,
             tar: document.getElementById('mapTarget').value
         };
 
-        if (!mapping.id || !mapping.act || !mapping.tar) {
-            alert("Please map at least ID, Actual, and Target columns.");
-            return;
-        }
-
-        // Increment Version
-        buildVersion = parseFloat((buildVersion + 0.1).toFixed(1));
-        document.getElementById('versionNum').innerText = buildVersion.toFixed(1);
-
         const summary = currentWorkbook.Sheets["Summary"];
-        document.getElementById('reportHeader').innerText = (summary && summary["A1"]) 
-            ? "Report: " + summary["A1"].v : "Commission Report";
-
-        runCalculations(mapping);
+        document.getElementById('reportHeader').innerText = (summary && summary["A1"]) ? summary["A1"].v : "Commission Report";
+        
+        runCalculations(map);
     });
 
     function runCalculations(map) {
         const output = document.getElementById('output');
         const manualTarget = cleanNum(document.getElementById('manualTargetComm').value);
         output.innerHTML = "";
-        finalData = [];
 
         currentWorkbook.SheetNames.forEach(sheetName => {
             if (sheetName === "Summary") return;
-            const data = XLSX.utils.sheet_to_json(currentWorkbook.Sheets[sheetName]);
+            const rows = XLSX.utils.sheet_to_json(currentWorkbook.Sheets[sheetName]);
             
-            const filtered = data.filter(row => row[map.id] != 0 && row[map.id] != undefined);
-            
-            const units = filtered.reduce((acc, row) => {
+            // Step 1: Group data by Organisational Unit
+            const unitGroups = rows.reduce((acc, row) => {
+                if (!row[map.id] || row[map.id] == 0) return acc;
                 const uName = row[map.unit] || "Unassigned";
                 if (!acc[uName]) acc[uName] = [];
                 acc[uName].push(row);
                 return acc;
             }, {});
 
-            for (const u in units) {
-                renderUnit(u, units[u], map, manualTarget);
+            for (const unit in unitGroups) {
+                processUnit(unit, unitGroups[unit], map, manualTarget);
             }
         });
     }
 
-    function renderUnit(uName, members, map, manualTarget) {
-        let tAct = 0, tTar = 0;
-        
-        const processed = members.map(m => {
-            const a = cleanNum(m[map.act]);
-            const t = cleanNum(m[map.tar]);
-            tAct += a; tTar += t;
-            const ach = t > 0 ? (a / t) : 0;
-            return { id: m[map.id], act: a, tar: t, ach, isEligible: ach >= 0.75 };
+    function processUnit(uName, unitRows, map, manualTarget) {
+        // Step 2: Group by Individual inside the Unit (Summing multiple streams)
+        const individuals = unitRows.reduce((acc, row) => {
+            const id = row[map.id];
+            if (!acc[id]) {
+                acc[id] = { name: row[map.name] || "Unknown", id: id, totalAct: 0, totalTar: 0 };
+            }
+            acc[id].totalAct += cleanNum(row[map.act]);
+            acc[id].totalTar += cleanNum(row[map.tar]);
+            return acc;
+        }, {});
+
+        const peopleArray = Object.values(individuals);
+        let teamAct = 0, teamTar = 0;
+
+        peopleArray.forEach(p => {
+            teamAct += p.totalAct;
+            teamTar += p.totalTar;
+            p.achPct = p.totalTar > 0 ? (p.totalAct / p.totalTar) : 0;
+            p.isEligible = p.achPct >= 0.75;
+            // Weighted Score = Revenue * Achievement%
+            p.weight = p.isEligible ? (p.totalAct * p.achPct) : 0;
         });
 
-        const rate = getAnnexureCRate(tAct, tTar);
-        const pool = tTar > 0 ? Math.max(0, tAct - (tTar * 0.8)) * rate : 0;
-        
-        let totalW = 0;
-        processed.forEach(p => {
-            p.w = p.isEligible ? (p.act * p.ach) : 0;
-            totalW += p.w;
-        });
+        const rate = getAnnexureCRate(teamAct, teamTar);
+        const teamPool = teamTar > 0 ? Math.max(0, teamAct - (teamTar * 0.8)) * rate : 0;
+        const totalTeamWeight = peopleArray.reduce((sum, p) => sum + p.weight, 0);
 
+        // UI Creation
         const card = document.createElement('div');
         card.className = 'unit-card';
         card.innerHTML = `<h3>Unit: ${uName}</h3>
-            <div style="display:flex; gap:15px; margin-bottom:10px;">
-                <span class="stat-item">Team Ach: <b>${tTar > 0 ? ((tAct/tTar)*100).toFixed(1) : 0}%</b></span>
-                <span class="stat-item">Pool Rate: <b>${(rate*100).toFixed(2)}%</b></span>
-                <span class="stat-item">Pool: <b>R${pool.toFixed(2)}</b></span>
-            </div>`;
+            <p>Team Revenue: R${teamAct.toFixed(2)} | Pool: <b>R${teamPool.toFixed(2)}</b> (${(rate*100).toFixed(2)}%)</p>
+            <table>
+                <tr>
+                    <th>Pers.No.</th><th>Name</th><th>Total Actual</th><th>Total Target</th><th>Achieve%</th><th>Weight</th><th>Commission</th>
+                </tr>`;
 
-        let table = `<table><tr><th>ID</th><th>Actual</th><th>Target</th><th>Ach%</th><th>Commission (R)</th></tr>`;
-        processed.forEach(p => {
-            let share = (p.isEligible && totalW > 0) ? (p.w / totalW) * pool : 0;
+        peopleArray.forEach(p => {
+            let share = (p.isEligible && totalTeamWeight > 0) ? (p.weight / totalTeamWeight) * teamPool : 0;
             if (share > (manualTarget * 3.1)) share = manualTarget * 3.1;
 
-            table += `<tr class="${!p.isEligible ? 'disqualified' : ''}">
-                <td>${p.id}</td><td>${p.act.toFixed(2)}</td><td>${p.tar.toFixed(2)}</td>
-                <td>${(p.ach * 100).toFixed(1)}%</td>
-                <td><b>${share.toFixed(2)}</b> ${!p.isEligible ? ' (Fail 75%)' : ''}</td>
-            </tr>`;
+            card.querySelector('table').innerHTML += `
+                <tr class="${!p.isEligible ? 'disqualified' : ''}">
+                    <td>${p.id}</td>
+                    <td>${p.name}</td>
+                    <td>R${p.totalAct.toFixed(2)}</td>
+                    <td>R${p.totalTar.toFixed(2)}</td>
+                    <td>${(p.achPct * 100).toFixed(1)}%</td>
+                    <td>${p.weight.toFixed(2)}</td>
+                    <td><b>R${share.toFixed(2)}</b></td>
+                </tr>`;
         });
-        card.innerHTML += table + `</table>`;
-        output.appendChild(card);
+        document.getElementById('output').appendChild(card);
     }
 </script>
 </body>
