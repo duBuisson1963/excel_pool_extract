@@ -2,35 +2,35 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Commission Engine - Monthly Report</title>
+    <title>Commission Engine - ZAR Version</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
     <style>
         body { font-family: 'Segoe UI', Tahoma, sans-serif; margin: 30px; background-color: #f0f2f5; }
         .config-panel { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); margin-bottom: 20px; }
-        #reportHeader { text-align: center; color: #2c3e50; margin-bottom: 30px; text-transform: uppercase; letter-spacing: 1px; }
+        #reportHeader { text-align: center; color: #2c3e50; margin-bottom: 30px; text-transform: uppercase; }
         .unit-card { background: white; border-radius: 8px; padding: 20px; margin-bottom: 25px; border-left: 6px solid #28a745; box-shadow: 0 2px 5px rgba(0,0,0,0.05); }
         table { width: 100%; border-collapse: collapse; margin-top: 15px; }
         th, td { border: 1px solid #e9ecef; padding: 12px; text-align: left; }
-        th { background-color: #f8f9fa; font-weight: 600; font-size: 0.9em; }
+        th { background-color: #f8f9fa; font-size: 0.9em; }
         .disqualified { background-color: #fff5f5; color: #dc3545; font-style: italic; }
         .stat-grid { display: flex; gap: 15px; margin-bottom: 15px; }
         .stat-item { background: #e7f1ff; padding: 10px; border-radius: 5px; flex: 1; font-size: 0.85em; }
-        .btn-group { display: flex; gap: 10px; align-items: center; }
-        button { padding: 10px 20px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; }
+        input[type="number"] { padding: 8px; border-radius: 4px; border: 1px solid #ccc; width: 150px; }
+        button { padding: 10px 20px; background: #28a745; color: white; border: none; border-radius: 4px; cursor: pointer; }
     </style>
 </head>
 <body>
 
 <div class="config-panel">
-    <h2>Data Extraction & Commission Engine</h2>
+    <h2>Data Extraction & Commission Engine (ZAR)</h2>
     <div class="stat-grid">
         <div>
-            <label><strong>Target Commission Midpoint:</strong></label><br>
-            <input type="number" id="manualTargetComm" value="1000" style="padding: 8px; border-radius: 4px; border: 1px solid #ccc;">
+            <label><strong>Target Commission Midpoint (R):</strong></label><br>
+            <input type="number" id="manualTargetComm" value="1000">
         </div>
-        <div class="btn-group">
+        <div style="align-self: flex-end;">
             <input type="file" id="fileInput" accept=".xlsx, .xls" />
-            <button id="downloadBtn" style="display:none; background: #28a745;">Download Excel Report</button>
+            <button id="downloadBtn" style="display:none;">Download Excel Report</button>
         </div>
     </div>
 </div>
@@ -41,8 +41,8 @@
 <script>
     let finalExportData = [];
 
-    // Annexure C Lookup
     function getAnnexureCRate(actual, target) {
+        if (target <= 0) return 0; // Prevent NaN
         const achievement = (actual / target) * 100;
         if (achievement < 80) return 0;
         if (achievement >= 130) return 0.05;
@@ -56,24 +56,15 @@
             const data = new Uint8Array(event.target.result);
             const workbook = XLSX.read(data, {type: 'array'});
             
-            // Extract Month from Summary Tab Cell A1
-            extractReportHeading(workbook);
+            const summarySheet = workbook.Sheets["Summary"];
+            document.getElementById('reportHeader').innerText = (summarySheet && summarySheet["A1"]) 
+                ? "Commission Report: " + summarySheet["A1"].v 
+                : "Commission Report";
             
             processExcel(workbook);
         };
         reader.readAsArrayBuffer(e.target.files[0]);
     });
-
-    function extractReportHeading(workbook) {
-        const headerEl = document.getElementById('reportHeader');
-        const summarySheet = workbook.Sheets["Summary"];
-        
-        if (summarySheet && summarySheet["A1"]) {
-            headerEl.innerText = "Commission Report: " + summarySheet["A1"].v;
-        } else {
-            headerEl.innerText = "Commission Report (Month Not Found in Summary!A1)";
-        }
-    }
 
     function processExcel(workbook) {
         const output = document.getElementById('output');
@@ -82,7 +73,6 @@
         finalExportData = [];
 
         workbook.SheetNames.forEach(sheetName => {
-            // Skip the Summary tab for data processing
             if (sheetName === "Summary") return;
 
             const data = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName]);
@@ -99,7 +89,7 @@
                 calculateAndRender(unit, units[unit], manualTargetComm);
             }
         });
-        document.getElementById('downloadBtn').style.display = 'block';
+        document.getElementById('downloadBtn').style.display = 'inline-block';
     }
 
     function calculateAndRender(unitName, members, manualTarget) {
@@ -110,7 +100,8 @@
         });
 
         const rate = getAnnexureCRate(teamAct, teamTar);
-        const teamPool = Math.max(0, teamAct - (teamTar * 0.8)) * rate;
+        const teamPool = teamTar > 0 ? Math.max(0, teamAct - (teamTar * 0.8)) * rate : 0;
+        const teamAchievePct = teamTar > 0 ? ((teamAct / teamTar) * 100).toFixed(1) : "0.0";
 
         let totalWeightedScore = 0;
         const processed = members.map(m => {
@@ -127,9 +118,9 @@
         card.className = 'unit-card';
         card.innerHTML = `<h3>Unit: ${unitName}</h3>
             <div class="stat-grid">
-                <div class="stat-item">Team Achievement: <strong>${((teamAct/teamTar)*100).toFixed(1)}%</strong></div>
+                <div class="stat-item">Team Achievement: <strong>${teamAchievePct}%</strong></div>
                 <div class="stat-item">Pool Rate: <strong>${(rate*100).toFixed(2)}%</strong></div>
-                <div class="stat-item">Total Pool: <strong>$${teamPool.toFixed(2)}</strong></div>
+                <div class="stat-item">Total Pool: <strong>R${teamPool.toFixed(2)}</strong></div>
             </div>`;
 
         let table = `<table><tr><th>Pers.No.</th><th>Actual</th><th>Target</th><th>Achieve%</th><th>Share</th></tr>`;
@@ -145,16 +136,15 @@
                 <td>${m.act.toFixed(2)}</td>
                 <td>${m.tar.toFixed(2)}</td>
                 <td>${(m.achieve * 100).toFixed(1)}%</td>
-                <td><strong>$${share.toFixed(2)}</strong> ${!m.isEligible ? '(Below 75%)' : ''}</td>
+                <td><strong>R${share.toFixed(2)}</strong> ${!m.isEligible ? '(Below 75%)' : ''}</td>
             </tr>`;
 
             finalExportData.push({
-                "Report Month": document.getElementById('reportHeader').innerText.replace('Commission Report: ', ''),
                 "Unit": unitName,
                 "Pers.No.": m['Pers.No.'],
                 "Achievement %": (m.achieve * 100).toFixed(1),
                 "Eligible": m.isEligible ? "Yes" : "No",
-                "Final Commission": share.toFixed(2)
+                "Final Commission (R)": share.toFixed(2)
             });
         });
 
@@ -165,8 +155,8 @@
     document.getElementById('downloadBtn').addEventListener('click', () => {
         const ws = XLSX.utils.json_to_sheet(finalExportData);
         const wb = XLSX.utils.book_new();
-        XLSX.utils.book_append_sheet(wb, ws, "Monthly Summary");
-        XLSX.writeFile(wb, "Commission_Report.xlsx");
+        XLSX.utils.book_append_sheet(wb, ws, "Commission Report");
+        XLSX.writeFile(wb, "Team_Commission_Report.xlsx");
     });
 </script>
 </body>
