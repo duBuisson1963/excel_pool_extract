@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Commission Engine v3.2</title>
+    <title>Commission Engine v3.3</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
     <style>
         body { font-family: 'Segoe UI', sans-serif; margin: 30px; background-color: #f0f2f5; }
@@ -18,14 +18,13 @@
         .unit-summary-row { background: #2c3e50; color: white; font-weight: bold; }
         .midpoint-input { width: 90px; padding: 4px; border: 2px solid #007bff; border-radius: 3px; font-weight: bold; text-align: right; }
         .version-info { font-weight: bold; color: #444; margin-bottom: 10px; border-bottom: 2px solid #ccc; padding-bottom: 5px; }
-        button { padding: 10px 20px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: bold; }
-        .share-cell { font-weight: bold; color: #2c3e50; text-align: right; }
+        button { padding: 10px 20px; background: #28a745; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: bold; }
     </style>
 </head>
 <body>
 
 <div class="panel">
-    <div class="version-info">VERSION NUMBER: 3.2</div>
+    <div class="version-info">VERSION NUMBER: 3.3</div>
     <h2>Commission Allocation Engine</h2>
     
     <div style="display:flex; gap:20px; align-items:flex-end;">
@@ -40,9 +39,9 @@
     </div>
 
     <div id="mappingArea" class="mapping-box" style="display:none;">
-        <strong>2. Map Columns:</strong>
+        <strong>2. Map Your Columns:</strong>
         <div class="mapping-grid" id="mappingGrid"></div>
-        <button id="runBtn" style="background:#28a745;">Process and Calculate</button>
+        <button id="runBtn">Process and Calculate</button>
     </div>
 </div>
 
@@ -51,7 +50,7 @@
 
 <script>
     let wb = null;
-    let unitStore = {}; // Holds data for recalculation
+    let unitStore = {};
 
     function cleanNum(v) {
         if (!v) return 0;
@@ -64,12 +63,6 @@
         return parseFloat(s) || 0;
     }
 
-    function getRate(act, tar) {
-        const ach = tar > 0 ? (act / tar) * 100 : 0;
-        if (ach < 80) return 0;
-        return Math.min(0.05, 0.02 + (Math.floor(ach) - 80) * 0.0006);
-    }
-
     document.getElementById('fileInput').addEventListener('change', (e) => {
         const reader = new FileReader();
         reader.onload = (ev) => {
@@ -77,12 +70,16 @@
             wb = XLSX.read(data, {type: 'array'});
             const sn = wb.SheetNames.find(n => n !== "Summary");
             const headers = XLSX.utils.sheet_to_json(wb.Sheets[sn], {header: 1})[0];
+            
             const grid = document.getElementById('mappingGrid');
             grid.innerHTML = "";
             const fields = [
-                { id: 'mID', label: 'ID' }, { id: 'mName', label: 'Name' },
-                { id: 'mUnit', label: 'Unit' }, { id: 'mStr', label: 'Stream' },
-                { id: 'mAct', label: 'Actual' }, { id: 'mTar', label: 'Target' }
+                { id: 'mID', label: 'Person Number (ID)' },
+                { id: 'mName', label: 'Full Name' },
+                { id: 'mUnit', label: 'Organisational Unit' },
+                { id: 'mStr', label: 'Stream Description' },
+                { id: 'mAct', label: 'Actual Revenue' },
+                { id: 'mTar', label: 'Target Revenue' }
             ];
             fields.forEach(f => {
                 let opts = headers.map(h => `<option value="${h}">${h}</option>`).join('');
@@ -94,7 +91,11 @@
     });
 
     document.getElementById('runBtn').addEventListener('click', () => {
-        const map = { id: document.getElementById('mID').value, name: document.getElementById('mName').value, unit: document.getElementById('mUnit').value, str: document.getElementById('mStr').value, act: document.getElementById('mAct').value, tar: document.getElementById('mTar').value };
+        const map = { 
+            id: document.getElementById('mID').value, name: document.getElementById('mName').value, 
+            unit: document.getElementById('mUnit').value, str: document.getElementById('mStr').value, 
+            act: document.getElementById('mAct').value, tar: document.getElementById('mTar').value 
+        };
         const showAll = document.getElementById('showAllTeams').checked;
         const out = document.getElementById('output');
         out.innerHTML = "";
@@ -135,7 +136,7 @@
         const achPct = uT > 0 ? (uA / uT) * 100 : 0;
         if (achPct < 80 && !showAll) return;
 
-        const rate = getRate(uA, uT);
+        const rate = achPct >= 80 ? Math.min(0.05, 0.02 + (Math.floor(achPct) - 80) * 0.0006) : 0;
         const pool = Math.max(0, uA - (uT * 0.8)) * rate;
         const totalEligRev = ppl.reduce((s, p) => p.elig ? s + p.a : s, 0);
 
@@ -143,25 +144,18 @@
 
         const card = document.createElement('div');
         card.className = 'unit-card';
-        card.innerHTML = `<h3>Unit: ${uName}</h3>
-            <p>Team: ${achPct.toFixed(1)}% | Rate: ${(rate*100).toFixed(2)}% | Pool: R${pool.toFixed(2)}</p>
-            <table id="table_${uName}">
-                <tr><th>Stream / Individual</th><th>Actual</th><th>Target</th><th>Ach%</th><th>Midpoint (R)</th><th>Share</th></tr>
-            </table>`;
+        card.innerHTML = `<h3>Unit: ${uName}</h3><p>Team: ${achPct.toFixed(1)}% | Pool: R${pool.toFixed(2)}</p>
+            <table><tr><th>Stream / Individual</th><th>Actual</th><th>Target</th><th>Ach%</th><th>Midpoint (R)</th><th>Share</th></tr></table>`;
         
         let table = card.querySelector('table');
         ppl.forEach(p => {
             p.streams.forEach((s, i) => {
-                table.innerHTML += `<tr class="stream-row"><td>${i===0 ? '<b>'+p.name+'</b>' : '&nbsp;&nbsp;↳ '+s.l}</td><td>R${s.a.toFixed(2)}</td><td>R${s.t.toFixed(2)}</td><td>-</td><td>-</td><td>-</td></tr>`;
+                table.innerHTML += `<tr class="stream-row"><td>${i===0 ? '<b>'+p.name+'</b> ('+p.id+')' : '&nbsp;&nbsp;↳ '+s.l}</td><td>R${s.a.toFixed(2)}</td><td>R${s.t.toFixed(2)}</td><td>-</td><td>-</td><td>-</td></tr>`;
             });
-            table.innerHTML += `<tr class="total-row">
-                <td>INDIVIDUAL TOTAL</td><td>R${p.a.toFixed(2)}</td><td>R${p.t.toFixed(2)}</td>
-                <td>${(p.ach*100).toFixed(1)}%</td>
+            table.innerHTML += `<tr class="total-row"><td>TOTAL</td><td>R${p.a.toFixed(2)}</td><td>R${p.t.toFixed(2)}</td><td>${(p.ach*100).toFixed(1)}%</td>
                 <td><input type="number" class="midpoint-input" data-unit="${uName}" data-pid="${p.id}" value="1000" oninput="runRecalc('${uName}')"></td>
-                <td class="share-cell" id="share_${uName}_${p.id}">R0.00</td>
-            </tr>`;
+                <td id="s_${uName}_${p.id}">R0.00</td></tr>`;
         });
-
         table.innerHTML += `<tr class="unit-summary-row"><td>UNIT SUMMARY</td><td>R${uA.toFixed(2)}</td><td>R${uT.toFixed(2)}</td><td>${achPct.toFixed(1)}%</td><td>-</td><td>-</td></tr>`;
         document.getElementById('output').appendChild(card);
         runRecalc(uName);
@@ -169,20 +163,11 @@
 
     window.runRecalc = function(uName) {
         const data = unitStore[uName];
-        if (!data) return;
-
         data.ppl.forEach(p => {
-            // Find the specific input for this person in this unit
-            const input = document.querySelector(`.midpoint-input[data-unit="${uName}"][data-pid="${p.id}"]`);
-            const mid = cleanNum(input.value);
-            
+            const mid = cleanNum(document.querySelector(`.midpoint-input[data-unit="${uName}"][data-pid="${p.id}"]`).value);
             let share = (p.elig && data.totalEligRev > 0) ? (p.a / data.totalEligRev) * data.pool : 0;
-            const cap = mid * 3.1;
-            
-            if (share > cap) share = cap;
-            
-            const cell = document.getElementById(`share_${uName}_${p.id}`);
-            cell.innerText = `R${share.toFixed(2)}${!p.elig ? ' (Fail 75%)' : ''}`;
+            if (share > mid * 3.1) share = mid * 3.1;
+            document.getElementById(`s_${uName}_${p.id}`).innerText = `R${share.toFixed(2)}${!p.elig ? ' (Fail 75%)' : ''}`;
         });
     };
 </script>
