@@ -2,36 +2,45 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Commission Engine v2.4</title>
+    <title>Commission Engine v2.5</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
     <style>
         body { font-family: 'Segoe UI', sans-serif; margin: 30px; background-color: #f0f2f5; }
         .panel { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); margin-bottom: 20px; }
+        .mapping-box { background: #fff3cd; padding: 15px; border: 1px solid #ffeeba; border-radius: 8px; margin-top: 15px; }
+        .mapping-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin: 10px 0; }
         .unit-card { background: white; border-radius: 8px; padding: 20px; margin-bottom: 25px; border-left: 6px solid #28a745; }
         table { width: 100%; border-collapse: collapse; margin-top: 15px; }
-        th, td { border: 1px solid #dee2e6; padding: 8px 12px; text-align: left; font-size: 0.85em; }
-        th { background-color: #f8f9fa; }
-        .stream-row { color: #555; background-color: #fafafa; font-style: italic; }
-        .total-row { background-color: #eee; font-weight: bold; border-top: 2px solid #ccc; }
+        th, td { border: 1px solid #dee2e6; padding: 8px; text-align: left; font-size: 0.85em; }
+        .stream-row { color: #666; font-style: italic; background: #fafafa; }
+        .total-row { background: #eee; font-weight: bold; }
         .disqualified { color: #dc3545; }
-        .version-tag { float: right; font-weight: bold; padding: 5px; background: #333; color: #fff; border-radius: 4px; }
-        button { padding: 10px 20px; background: #28a745; color: white; border: none; border-radius: 4px; cursor: pointer; }
+        select { width: 100%; padding: 5px; }
+        button { padding: 10px 20px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; }
     </style>
 </head>
 <body>
 
 <div class="panel">
-    <div class="version-tag">Build: 2.4</div>
-    <h2>Commission Engine: Final Extraction Logic</h2>
-    
-    <div style="display: flex; gap: 20px; align-items: flex-end;">
+    <h2>Commission Engine v2.5</h2>
+    <div style="display:flex; gap:20px; align-items:flex-end;">
         <div>
-            <label><strong>Midpoint Target (R):</strong></label><br>
-            <input type="number" id="manualTargetComm" value="1000" style="padding:8px;">
+            <label>Midpoint Target (R):</label><br>
+            <input type="number" id="midpoint" value="1000" style="padding:8px;">
         </div>
-        <div>
-            <input type="file" id="fileInput" accept=".xlsx, .xls" />
+        <input type="file" id="fileInput" accept=".xlsx, .xls" />
+    </div>
+
+    <div id="mappingArea" class="mapping-box" style="display:none;">
+        <strong>Step 2: Map your columns (Zeros occur if these are wrong):</strong>
+        <div class="mapping-grid">
+            <div>ID:<select id="mID"></select></div>
+            <div>Name:<select id="mName"></select></div>
+            <div>Unit:<select id="mUnit"></select></div>
+            <div>Actual:<select id="mAct"></select></div>
+            <div>Target:<select id="mTar"></select></div>
         </div>
+        <button id="runBtn" style="background:#28a745;">Process Data</button>
     </div>
 </div>
 
@@ -39,147 +48,86 @@
 <div id="output"></div>
 
 <script>
-    // FIXED MAPPING - HEADERS MUST MATCH THESE
-    const HEADERS = {
-        ID: "Pers.No.",
-        NAME: "Full Name",
-        UNIT: "Short Text of Organisational Unit",
-        ACTUAL: "Actual",
-        TARGET: "Target"
-    };
+    let wb = null;
 
-    /**
-     * ULTRA-CLEANER: Handles "R", spaces, non-breaking spaces, 
-     * and mixed decimal points/commas.
-     */
-    function forceNumeric(val) {
-        if (val === undefined || val === null || val === "") return 0;
-        if (typeof val === 'number') return val;
-
-        // 1. Remove "R", spaces, and non-breaking spaces (char code 160)
-        let s = val.toString().replace(/[R\s\u00A0]/g, '');
-        
-        // 2. Determine decimal separator
-        // If it contains both , and . - remove the thousands separator
-        if (s.includes(',') && s.includes('.')) {
-            if (s.lastIndexOf('.') > s.lastIndexOf(',')) {
-                s = s.replace(/,/g, ''); // Dot is decimal
-            } else {
-                s = s.replace(/\./g, '').replace(',', '.'); // Comma is decimal
-            }
-        } else {
-            // Only one separator exists? Treat comma as a decimal point
-            s = s.replace(',', '.');
-        }
-        
-        const result = parseFloat(s);
-        return isNaN(result) ? 0 : result;
+    function cleanNum(v) {
+        if (!v) return 0;
+        if (typeof v === 'number') return v;
+        let s = v.toString().replace(/[R\s\u00A0,]/g, (m) => m === ',' ? '.' : '');
+        return parseFloat(s) || 0;
     }
 
-    document.getElementById('fileInput').addEventListener('change', function(e) {
+    document.getElementById('fileInput').addEventListener('change', (e) => {
         const reader = new FileReader();
-        reader.onload = (event) => {
-            const data = new Uint8Array(event.target.result);
-            // raw: true helps preserve raw values if formatting is weird
-            const workbook = XLSX.read(data, {type: 'array', raw: true});
+        reader.onload = (ev) => {
+            const data = new Uint8Array(ev.target.result);
+            wb = XLSX.read(data, {type: 'array'});
+            const sheet = wb.Sheets[wb.SheetNames.find(n => n !== "Summary")];
+            const headers = XLSX.utils.sheet_to_json(sheet, {header: 1})[0];
             
-            const summary = workbook.Sheets["Summary"];
-            document.getElementById('reportHeader').innerText = (summary && summary["A1"]) ? summary["A1"].v : "Commission Report";
-            
-            processExcel(workbook);
+            ['mID', 'mName', 'mUnit', 'mAct', 'mTar'].forEach(id => {
+                const sel = document.getElementById(id);
+                sel.innerHTML = headers.map(h => `<option value="${h}">${h}</option>`).join('');
+            });
+            document.getElementById('mappingArea').style.display = 'block';
         };
         reader.readAsArrayBuffer(e.target.files[0]);
     });
 
-    function processExcel(workbook) {
-        const output = document.getElementById('output');
-        const midpoint = forceNumeric(document.getElementById('manualTargetComm').value);
-        output.innerHTML = "";
+    document.getElementById('runBtn').addEventListener('click', () => {
+        const map = { id: document.getElementById('mID').value, name: document.getElementById('mName').value, unit: document.getElementById('mUnit').value, act: document.getElementById('mAct').value, tar: document.getElementById('mTar').value };
+        const mid = cleanNum(document.getElementById('midpoint').value);
+        const out = document.getElementById('output');
+        out.innerHTML = "";
 
-        workbook.SheetNames.forEach(sheetName => {
-            if (sheetName === "Summary") return;
-            const rows = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], {defval: 0});
-            
-            const unitGroups = rows.reduce((acc, row) => {
-                const id = row[HEADERS.ID];
-                if (!id || id == 0) return acc;
-                const uName = row[HEADERS.UNIT] || "Unassigned";
-                if (!acc[uName]) acc[uName] = [];
-                acc[uName].push(row);
+        const summ = wb.Sheets["Summary"];
+        document.getElementById('reportHeader').innerText = (summ && summ["A1"]) ? summ["A1"].v : "Report";
+
+        wb.SheetNames.forEach(sn => {
+            if (sn === "Summary") return;
+            const rows = XLSX.utils.sheet_to_json(wb.Sheets[sn]);
+            const unitGroups = rows.reduce((acc, r) => {
+                if (!r[map.id]) return acc;
+                const u = r[map.unit] || "Unassigned";
+                if (!acc[u]) acc[u] = [];
+                acc[u].push(r);
                 return acc;
             }, {});
 
-            for (const unit in unitGroups) {
-                renderUnit(unit, unitGroups[unit], midpoint);
-            }
+            for (const u in unitGroups) render(u, unitGroups[u], map, mid);
         });
-    }
+    });
 
-    function renderUnit(uName, unitRows, midpoint) {
-        const personData = unitRows.reduce((acc, row) => {
-            const id = row[HEADERS.ID];
-            if (!acc[id]) acc[id] = { name: row[HEADERS.NAME] || "Unknown", id: id, streams: [], tAct: 0, tTar: 0 };
-            
-            const a = forceNumeric(row[HEADERS.ACTUAL]);
-            const t = forceNumeric(row[HEADERS.TARGET]);
-            
+    function render(uName, rows, map, mid) {
+        const pData = rows.reduce((acc, r) => {
+            const id = r[map.id];
+            if (!acc[id]) acc[id] = { name: r[map.name], id, streams: [], a: 0, t: 0 };
+            const a = cleanNum(r[map.act]), t = cleanNum(r[map.tar]);
             acc[id].streams.push({ a, t });
-            acc[id].tAct += a;
-            acc[id].tTar += t;
+            acc[id].a += a; acc[id].t += t;
             return acc;
         }, {});
 
-        const people = Object.values(personData);
-        let unitAct = 0, unitTar = 0;
+        const ppl = Object.values(pData);
+        let uA = 0, uT = 0;
+        ppl.forEach(p => { uA += p.a; uT += p.t; p.ach = p.t > 0 ? p.a / p.t : 0; p.elig = p.ach >= 0.75; p.w = p.elig ? p.a * p.ach : 0; });
 
-        people.forEach(p => { 
-            unitAct += p.tAct; unitTar += p.tTar;
-            p.ach = p.tTar > 0 ? (p.tAct / p.tTar) : 0;
-            p.eligible = p.ach >= 0.75;
-            p.weight = p.eligible ? (p.tAct * p.ach) : 0;
+        const ach = uT > 0 ? (uA / uT) * 100 : 0;
+        const rate = ach >= 80 ? Math.min(0.05, 0.02 + (Math.floor(ach) - 80) * 0.0006) : 0;
+        const pool = uT > 0 ? Math.max(0, uA - (uT * 0.8)) * rate : 0;
+        const tw = ppl.reduce((s, p) => s + p.w, 0);
+
+        const div = document.createElement('div');
+        div.className = 'unit-card';
+        div.innerHTML = `<h3>Unit: ${uName}</h3><p>Pool: R${pool.toFixed(2)} (${(rate*100).toFixed(2)}%)</p><table><tr><th>Name</th><th>Actual</th><th>Target</th><th>Achieve%</th><th>Share</th></tr>`;
+        
+        ppl.forEach(p => {
+            p.streams.forEach((s, i) => { div.querySelector('table').innerHTML += `<tr class="stream-row"><td>${i===0 ? p.name : ''}</td><td>R${s.a.toFixed(2)}</td><td>R${s.t.toFixed(2)}</td><td>-</td><td>-</td></tr>`; });
+            let s = (p.elig && tw > 0) ? (p.w / tw) * pool : 0;
+            if (s > mid * 3.1) s = mid * 3.1;
+            div.querySelector('table').innerHTML += `<tr class="total-row ${!p.elig?'disqualified':''}"><td>TOTAL</td><td>R${p.a.toFixed(2)}</td><td>R${p.t.toFixed(2)}</td><td>${(p.ach*100).toFixed(1)}%</td><td>R${s.toFixed(2)}</td></tr>`;
         });
-
-        const achievement = unitTar > 0 ? (unitAct / unitTar) * 100 : 0;
-        let rate = 0;
-        if (achievement >= 80) {
-            rate = 0.02 + (Math.floor(achievement) - 80) * 0.0006;
-            if (rate > 0.05) rate = 0.05;
-        }
-
-        const pool = unitTar > 0 ? Math.max(0, unitAct - (unitTar * 0.8)) * rate : 0;
-        const totalW = people.reduce((s, p) => s + p.weight, 0);
-
-        const card = document.createElement('div');
-        card.className = 'unit-card';
-        card.innerHTML = `<h3>Unit: ${uName}</h3>
-            <p>Team Achievement: ${achievement.toFixed(1)}% | Pool: R${pool.toFixed(2)} (${(rate*100).toFixed(2)}%)</p>
-            <table>
-                <tr><th>Name (ID)</th><th>Stream Actual</th><th>Stream Target</th><th>Achieve%</th><th>Share</th></tr>`;
-
-        people.forEach(p => {
-            p.streams.forEach((s, idx) => {
-                card.querySelector('table').innerHTML += `
-                    <tr class="stream-row">
-                        <td>${idx === 0 ? p.name + ' (' + p.id + ')' : ''}</td>
-                        <td>R${s.a.toFixed(2)}</td>
-                        <td>R${s.t.toFixed(2)}</td>
-                        <td>-</td><td>-</td>
-                    </tr>`;
-            });
-
-            let share = (p.eligible && totalW > 0) ? (p.weight / totalW) * pool : 0;
-            if (share > midpoint * 3.1) share = midpoint * 3.1;
-
-            card.querySelector('table').innerHTML += `
-                <tr class="total-row ${!p.eligible ? 'disqualified' : ''}">
-                    <td>TOTAL FOR ${p.name}</td>
-                    <td>R${p.tAct.toFixed(2)}</td>
-                    <td>R${p.tTar.toFixed(2)}</td>
-                    <td>${(p.ach * 100).toFixed(1)}%</td>
-                    <td>R${share.toFixed(2)} ${!p.eligible ? '(Below 75%)' : ''}</td>
-                </tr>`;
-        });
-        document.getElementById('output').appendChild(card);
+        document.getElementById('output').appendChild(div);
     }
 </script>
 </body>
