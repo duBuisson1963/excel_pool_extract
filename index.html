@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Commission Engine v2.8</title>
+    <title>Commission Engine v3.1</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
     <style>
         body { font-family: 'Segoe UI', sans-serif; margin: 30px; background-color: #f0f2f5; }
@@ -10,36 +10,38 @@
         .mapping-box { background: #fff3cd; padding: 15px; border: 1px solid #ffeeba; border-radius: 8px; margin-top: 15px; }
         .mapping-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin: 15px 0; }
         .unit-card { background: white; border-radius: 8px; padding: 20px; margin-bottom: 25px; border-left: 6px solid #28a745; box-shadow: 0 2px 5px rgba(0,0,0,0.05); }
+        .locked-unit { border-left: 6px solid #dc3545; opacity: 0.8; }
         table { width: 100%; border-collapse: collapse; margin-top: 15px; }
         th, td { border: 1px solid #dee2e6; padding: 8px; text-align: left; font-size: 0.85em; }
         th { background-color: #f8f9fa; }
         .stream-row { color: #666; font-style: italic; background: #fafafa; }
         .total-row { background: #eee; font-weight: bold; }
         .unit-summary-row { background: #2c3e50; color: white; font-weight: bold; }
-        .disqualified { color: #dc3545; }
+        .midpoint-input { width: 80px; padding: 4px; border: 1px solid #007bff; border-radius: 3px; font-weight: bold; }
         .version-info { font-weight: bold; color: #444; margin-bottom: 10px; border-bottom: 2px solid #ccc; padding-bottom: 5px; }
-        select { width: 100%; padding: 5px; border: 1px solid #999; border-radius: 4px; }
+        .filter-opt { margin-top: 10px; background: #e9ecef; padding: 10px; border-radius: 4px; display: inline-block; }
         button { padding: 10px 20px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: bold; }
     </style>
 </head>
 <body>
 
 <div class="panel">
-    <div class="version-info">VERSION NUMBER: 2.8</div>
+    <div class="version-info">VERSION NUMBER: 3.1</div>
     <h2>Commission Allocation Engine</h2>
     
     <div style="display:flex; gap:20px; align-items:flex-end;">
         <div>
-            <label>Midpoint Target (R):</label><br>
-            <input type="number" id="midpoint" value="1000" style="padding:8px; border-radius:4px; border:1px solid #ccc;">
-        </div>
-        <div>
+            <label><strong>1. Upload File:</strong></label><br>
             <input type="file" id="fileInput" accept=".xlsx, .xls" />
+        </div>
+        <div class="filter-opt">
+            <input type="checkbox" id="showAllTeams">
+            <label for="showAllTeams"><strong>Show All Teams</strong> (Including those below 80% gate)</label>
         </div>
     </div>
 
     <div id="mappingArea" class="mapping-box" style="display:none;">
-        <strong>Step 2: Map Columns (Previewing First Values)</strong>
+        <strong>2. Map Columns:</strong>
         <div class="mapping-grid" id="mappingGrid"></div>
         <button id="runBtn" style="background:#28a745;">Process and Calculate</button>
     </div>
@@ -64,6 +66,13 @@
             s = s.replace(',', '.');
         }
         return parseFloat(s) || 0;
+    }
+
+    function getAnnexureCRate(actual, target) {
+        if (target <= 0) return 0;
+        const achPct = (actual / target) * 100;
+        if (achPct < 80) return 0;
+        return Math.min(0.05, 0.02 + (Math.floor(achPct) - 80) * 0.0006);
     }
 
     document.getElementById('fileInput').addEventListener('change', (e) => {
@@ -95,25 +104,19 @@
             { id: 'mTar', label: 'Target Revenue' }
         ];
         fields.forEach(field => {
-            let options = sheetHeaders.map(h => `<option value="${h}">${h} (Value: ${firstRowData[h] ?? 'Empty'})</option>`).join('');
-            grid.innerHTML += `<div>
-                <label><strong>${field.label}:</strong></label>
-                <select id="${field.id}">${options}</select>
-            </div>`;
+            let options = sheetHeaders.map(h => `<option value="${h}">${h} (Val: ${firstRowData[h] ?? 'Empty'})</option>`).join('');
+            grid.innerHTML += `<div><label><strong>${field.label}:</strong></label><select id="${field.id}">${options}</select></div>`;
         });
         document.getElementById('mappingArea').style.display = 'block';
     }
 
     document.getElementById('runBtn').addEventListener('click', () => {
         const map = { 
-            id: document.getElementById('mID').value, 
-            name: document.getElementById('mName').value, 
-            unit: document.getElementById('mUnit').value, 
-            stream: document.getElementById('mStream').value,
-            act: document.getElementById('mAct').value, 
-            tar: document.getElementById('mTar').value 
+            id: document.getElementById('mID').value, name: document.getElementById('mName').value, 
+            unit: document.getElementById('mUnit').value, stream: document.getElementById('mStream').value,
+            act: document.getElementById('mAct').value, tar: document.getElementById('mTar').value 
         };
-        const mid = cleanNum(document.getElementById('midpoint').value);
+        const showAll = document.getElementById('showAllTeams').checked;
         const out = document.getElementById('output');
         out.innerHTML = "";
 
@@ -130,11 +133,11 @@
                 acc[u].push(r);
                 return acc;
             }, {});
-            for (const u in unitGroups) renderUnit(u, unitGroups[u], map, mid);
+            for (const u in unitGroups) renderUnit(u, unitGroups[u], map, showAll);
         });
     });
 
-    function renderUnit(uName, rows, map, mid) {
+    function renderUnit(uName, rows, map, showAll) {
         const pData = rows.reduce((acc, r) => {
             const id = r[map.id];
             if (!acc[id]) acc[id] = { name: r[map.name], id, streams: [], a: 0, t: 0 };
@@ -146,47 +149,64 @@
 
         const ppl = Object.values(pData);
         let uA = 0, uT = 0;
-        ppl.forEach(p => { 
-            uA += p.a; uT += p.t; 
-            p.ach = p.t > 0 ? p.a / p.t : 0; 
-            p.elig = p.ach >= 0.75; 
-            p.w = p.elig ? p.a * p.ach : 0; 
-        });
+        ppl.forEach(p => { uA += p.a; uT += p.t; p.ach = p.t > 0 ? p.a / p.t : 0; p.elig = p.ach >= 0.75; });
 
         const achPct = uT > 0 ? (uA / uT) * 100 : 0;
-        const rate = achPct >= 80 ? Math.min(0.05, 0.02 + (Math.floor(achPct) - 80) * 0.0006) : 0;
+        const gateReached = achPct >= 80;
+
+        // FILTER: Only show teams that reached the 80% gate, unless "Show All" is checked
+        if (!gateReached && !showAll) return;
+
+        const rate = getAnnexureCRate(uA, uT);
         const pool = uT > 0 ? Math.max(0, uA - (uT * 0.8)) * rate : 0;
-        const tw = ppl.reduce((s, p) => s + p.w, 0);
+        const totalEligRev = ppl.reduce((sum, p) => p.elig ? sum + p.a : sum, 0);
 
         const card = document.createElement('div');
-        card.className = 'unit-card';
-        card.innerHTML = `<h3>Unit: ${uName}</h3><p>Pool Rate: ${(rate*100).toFixed(2)}% | Total Pool: R${pool.toFixed(2)}</p>
+        card.className = `unit-card ${!gateReached ? 'locked-unit' : ''}`;
+        card.innerHTML = `<h3>Unit: ${uName} ${!gateReached ? '(BELOW 80% GATE)' : ''}</h3>
+            <p>Team Ach: <b>${achPct.toFixed(1)}%</b> | Pool Rate: ${(rate*100).toFixed(2)}% | Total Pool: R${pool.toFixed(2)}</p>
             <table>
-                <tr><th>Person / Stream Name</th><th>Actual</th><th>Target</th><th>Achieve%</th><th>Share</th></tr>`;
+                <tr><th>Person / Stream</th><th>Actual</th><th>Target</th><th>Achieve%</th><th>Midpoint (R)</th><th>Share</th></tr>`;
         
         let tableBody = card.querySelector('table');
         ppl.forEach(p => {
             p.streams.forEach((s, i) => { 
                 tableBody.innerHTML += `<tr class="stream-row">
-                    <td>${i===0 ? '<b>' + p.name + '</b> (' + p.id + ')' : ''}&nbsp;&nbsp;↳ ${s.label}</td>
-                    <td>R${s.a.toFixed(2)}</td><td>R${s.t.toFixed(2)}</td><td>-</td><td>-</td></tr>`; 
+                    <td>${i===0 ? '<b>' + p.name + '</b>' : ''}&nbsp;&nbsp;↳ ${s.label}</td>
+                    <td>R${s.a.toFixed(2)}</td><td>R${s.t.toFixed(2)}</td><td>-</td><td>-</td><td>-</td></tr>`; 
             });
-            let s = (p.elig && tw > 0) ? (p.w / tw) * pool : 0;
-            if (s > mid * 3.1) s = mid * 3.1;
-            tableBody.innerHTML += `<tr class="total-row ${!p.elig?'disqualified':''}">
-                <td>INDIVIDUAL TOTAL</td><td>R${p.a.toFixed(2)}</td><td>R${p.t.toFixed(2)}</td><td>${(p.ach*100).toFixed(1)}%</td><td>R${s.toFixed(2)}</td></tr>`;
+
+            const rowId = `mid_${p.id.toString().replace(/\s/g, '_')}`;
+            tableBody.innerHTML += `<tr class="total-row">
+                <td>INDIVIDUAL TOTAL</td><td>R${p.a.toFixed(2)}</td><td>R${p.t.toFixed(2)}</td>
+                <td>${(p.ach*100).toFixed(1)}%</td>
+                <td><input type="number" class="midpoint-input" id="${rowId}" value="1000" onchange="recalc('${uName}')"></td>
+                <td id="share_${p.id}">R0.00</td>
+            </tr>`;
         });
 
-        // UNIT SUMMARY ROW
         tableBody.innerHTML += `<tr class="unit-summary-row">
-            <td>UNIT SUMMARY: ${uName}</td>
-            <td>R${uA.toFixed(2)}</td>
-            <td>R${uT.toFixed(2)}</td>
-            <td>${achPct.toFixed(1)}%</td>
-            <td>-</td>
+            <td>UNIT SUMMARY</td><td>R${uA.toFixed(2)}</td><td>R${uT.toFixed(2)}</td><td>${achPct.toFixed(1)}%</td><td>-</td><td>-</td>
         </tr>`;
 
         document.getElementById('output').appendChild(card);
+        
+        // Initial share calculation for the unit
+        window.unitData = window.unitData || {};
+        window.unitData[uName] = { ppl, totalEligRev, pool };
+        recalc(uName);
+    }
+
+    // Function to recalculate shares when midpoint changes
+    window.recalc = function(uName) {
+        const data = window.unitData[uName];
+        data.ppl.forEach(p => {
+            const midVal = cleanNum(document.getElementById(`mid_${p.id.toString().replace(/\s/g, '_')}`).value);
+            let s = (p.elig && data.totalEligRev > 0) ? (p.a / data.totalEligRev) * data.pool : 0;
+            const cap = midVal * 3.1;
+            if (s > cap) s = cap;
+            document.getElementById(`share_${p.id}`).innerText = `R${s.toFixed(2)}${!p.elig ? ' (Fail 75%)' : ''}`;
+        });
     }
 </script>
 </body>
