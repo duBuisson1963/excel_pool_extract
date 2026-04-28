@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Commission Engine v3.1</title>
+    <title>Commission Engine v3.2</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
     <style>
         body { font-family: 'Segoe UI', sans-serif; margin: 30px; background-color: #f0f2f5; }
@@ -10,23 +10,22 @@
         .mapping-box { background: #fff3cd; padding: 15px; border: 1px solid #ffeeba; border-radius: 8px; margin-top: 15px; }
         .mapping-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin: 15px 0; }
         .unit-card { background: white; border-radius: 8px; padding: 20px; margin-bottom: 25px; border-left: 6px solid #28a745; box-shadow: 0 2px 5px rgba(0,0,0,0.05); }
-        .locked-unit { border-left: 6px solid #dc3545; opacity: 0.8; }
         table { width: 100%; border-collapse: collapse; margin-top: 15px; }
         th, td { border: 1px solid #dee2e6; padding: 8px; text-align: left; font-size: 0.85em; }
         th { background-color: #f8f9fa; }
         .stream-row { color: #666; font-style: italic; background: #fafafa; }
         .total-row { background: #eee; font-weight: bold; }
         .unit-summary-row { background: #2c3e50; color: white; font-weight: bold; }
-        .midpoint-input { width: 80px; padding: 4px; border: 1px solid #007bff; border-radius: 3px; font-weight: bold; }
+        .midpoint-input { width: 90px; padding: 4px; border: 2px solid #007bff; border-radius: 3px; font-weight: bold; text-align: right; }
         .version-info { font-weight: bold; color: #444; margin-bottom: 10px; border-bottom: 2px solid #ccc; padding-bottom: 5px; }
-        .filter-opt { margin-top: 10px; background: #e9ecef; padding: 10px; border-radius: 4px; display: inline-block; }
         button { padding: 10px 20px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: bold; }
+        .share-cell { font-weight: bold; color: #2c3e50; text-align: right; }
     </style>
 </head>
 <body>
 
 <div class="panel">
-    <div class="version-info">VERSION NUMBER: 3.1</div>
+    <div class="version-info">VERSION NUMBER: 3.2</div>
     <h2>Commission Allocation Engine</h2>
     
     <div style="display:flex; gap:20px; align-items:flex-end;">
@@ -34,9 +33,9 @@
             <label><strong>1. Upload File:</strong></label><br>
             <input type="file" id="fileInput" accept=".xlsx, .xls" />
         </div>
-        <div class="filter-opt">
+        <div style="background: #e9ecef; padding: 10px; border-radius: 4px;">
             <input type="checkbox" id="showAllTeams">
-            <label for="showAllTeams"><strong>Show All Teams</strong> (Including those below 80% gate)</label>
+            <label for="showAllTeams"><strong>Show All Teams</strong> (Include < 80%)</label>
         </div>
     </div>
 
@@ -52,8 +51,7 @@
 
 <script>
     let wb = null;
-    let sheetHeaders = [];
-    let firstRowData = {};
+    let unitStore = {}; // Holds data for recalculation
 
     function cleanNum(v) {
         if (!v) return 0;
@@ -62,17 +60,14 @@
         if (s.includes(',') && s.includes('.')) {
             if (s.lastIndexOf('.') > s.lastIndexOf(',')) s = s.replace(/,/g, '');
             else s = s.replace(/\./g, '').replace(',', '.');
-        } else {
-            s = s.replace(',', '.');
-        }
+        } else { s = s.replace(',', '.'); }
         return parseFloat(s) || 0;
     }
 
-    function getAnnexureCRate(actual, target) {
-        if (target <= 0) return 0;
-        const achPct = (actual / target) * 100;
-        if (achPct < 80) return 0;
-        return Math.min(0.05, 0.02 + (Math.floor(achPct) - 80) * 0.0006);
+    function getRate(act, tar) {
+        const ach = tar > 0 ? (act / tar) * 100 : 0;
+        if (ach < 80) return 0;
+        return Math.min(0.05, 0.02 + (Math.floor(ach) - 80) * 0.0006);
     }
 
     document.getElementById('fileInput').addEventListener('change', (e) => {
@@ -80,45 +75,30 @@
         reader.onload = (ev) => {
             const data = new Uint8Array(ev.target.result);
             wb = XLSX.read(data, {type: 'array'});
-            const dataSheetName = wb.SheetNames.find(n => n !== "Summary");
-            const sheet = wb.Sheets[dataSheetName];
-            const rows = XLSX.utils.sheet_to_json(sheet);
-            if (rows.length > 0) {
-                sheetHeaders = Object.keys(rows[0]);
-                firstRowData = rows[0];
-                renderMappingUI();
-            }
+            const sn = wb.SheetNames.find(n => n !== "Summary");
+            const headers = XLSX.utils.sheet_to_json(wb.Sheets[sn], {header: 1})[0];
+            const grid = document.getElementById('mappingGrid');
+            grid.innerHTML = "";
+            const fields = [
+                { id: 'mID', label: 'ID' }, { id: 'mName', label: 'Name' },
+                { id: 'mUnit', label: 'Unit' }, { id: 'mStr', label: 'Stream' },
+                { id: 'mAct', label: 'Actual' }, { id: 'mTar', label: 'Target' }
+            ];
+            fields.forEach(f => {
+                let opts = headers.map(h => `<option value="${h}">${h}</option>`).join('');
+                grid.innerHTML += `<div><label><strong>${f.label}:</strong></label><select id="${f.id}">${opts}</select></div>`;
+            });
+            document.getElementById('mappingArea').style.display = 'block';
         };
         reader.readAsArrayBuffer(e.target.files[0]);
     });
 
-    function renderMappingUI() {
-        const grid = document.getElementById('mappingGrid');
-        grid.innerHTML = "";
-        const fields = [
-            { id: 'mID', label: 'Person Number (ID)' },
-            { id: 'mName', label: 'Full Name' },
-            { id: 'mUnit', label: 'Organisational Unit' },
-            { id: 'mStream', label: 'Stream Description' },
-            { id: 'mAct', label: 'Actual Revenue' },
-            { id: 'mTar', label: 'Target Revenue' }
-        ];
-        fields.forEach(field => {
-            let options = sheetHeaders.map(h => `<option value="${h}">${h} (Val: ${firstRowData[h] ?? 'Empty'})</option>`).join('');
-            grid.innerHTML += `<div><label><strong>${field.label}:</strong></label><select id="${field.id}">${options}</select></div>`;
-        });
-        document.getElementById('mappingArea').style.display = 'block';
-    }
-
     document.getElementById('runBtn').addEventListener('click', () => {
-        const map = { 
-            id: document.getElementById('mID').value, name: document.getElementById('mName').value, 
-            unit: document.getElementById('mUnit').value, stream: document.getElementById('mStream').value,
-            act: document.getElementById('mAct').value, tar: document.getElementById('mTar').value 
-        };
+        const map = { id: document.getElementById('mID').value, name: document.getElementById('mName').value, unit: document.getElementById('mUnit').value, str: document.getElementById('mStr').value, act: document.getElementById('mAct').value, tar: document.getElementById('mTar').value };
         const showAll = document.getElementById('showAllTeams').checked;
         const out = document.getElementById('output');
         out.innerHTML = "";
+        unitStore = {};
 
         const summ = wb.Sheets["Summary"];
         document.getElementById('reportHeader').innerText = (summ && summ["A1"]) ? summ["A1"].v : "Report";
@@ -126,14 +106,15 @@
         wb.SheetNames.forEach(sn => {
             if (sn === "Summary") return;
             const rows = XLSX.utils.sheet_to_json(wb.Sheets[sn]);
-            const unitGroups = rows.reduce((acc, r) => {
+            const groups = rows.reduce((acc, r) => {
                 if (!r[map.id]) return acc;
                 const u = r[map.unit] || "Unassigned";
                 if (!acc[u]) acc[u] = [];
                 acc[u].push(r);
                 return acc;
             }, {});
-            for (const u in unitGroups) renderUnit(u, unitGroups[u], map, showAll);
+
+            for (const u in groups) renderUnit(u, groups[u], map, showAll);
         });
     });
 
@@ -142,7 +123,7 @@
             const id = r[map.id];
             if (!acc[id]) acc[id] = { name: r[map.name], id, streams: [], a: 0, t: 0 };
             const a = cleanNum(r[map.act]), t = cleanNum(r[map.tar]);
-            acc[id].streams.push({ label: r[map.stream] || "Stream", a, t });
+            acc[id].streams.push({ l: r[map.str] || "Stream", a, t });
             acc[id].a += a; acc[id].t += t;
             return acc;
         }, {});
@@ -152,62 +133,58 @@
         ppl.forEach(p => { uA += p.a; uT += p.t; p.ach = p.t > 0 ? p.a / p.t : 0; p.elig = p.ach >= 0.75; });
 
         const achPct = uT > 0 ? (uA / uT) * 100 : 0;
-        const gateReached = achPct >= 80;
+        if (achPct < 80 && !showAll) return;
 
-        // FILTER: Only show teams that reached the 80% gate, unless "Show All" is checked
-        if (!gateReached && !showAll) return;
+        const rate = getRate(uA, uT);
+        const pool = Math.max(0, uA - (uT * 0.8)) * rate;
+        const totalEligRev = ppl.reduce((s, p) => p.elig ? s + p.a : s, 0);
 
-        const rate = getAnnexureCRate(uA, uT);
-        const pool = uT > 0 ? Math.max(0, uA - (uT * 0.8)) * rate : 0;
-        const totalEligRev = ppl.reduce((sum, p) => p.elig ? sum + p.a : sum, 0);
+        unitStore[uName] = { ppl, pool, totalEligRev };
 
         const card = document.createElement('div');
-        card.className = `unit-card ${!gateReached ? 'locked-unit' : ''}`;
-        card.innerHTML = `<h3>Unit: ${uName} ${!gateReached ? '(BELOW 80% GATE)' : ''}</h3>
-            <p>Team Ach: <b>${achPct.toFixed(1)}%</b> | Pool Rate: ${(rate*100).toFixed(2)}% | Total Pool: R${pool.toFixed(2)}</p>
-            <table>
-                <tr><th>Person / Stream</th><th>Actual</th><th>Target</th><th>Achieve%</th><th>Midpoint (R)</th><th>Share</th></tr>`;
+        card.className = 'unit-card';
+        card.innerHTML = `<h3>Unit: ${uName}</h3>
+            <p>Team: ${achPct.toFixed(1)}% | Rate: ${(rate*100).toFixed(2)}% | Pool: R${pool.toFixed(2)}</p>
+            <table id="table_${uName}">
+                <tr><th>Stream / Individual</th><th>Actual</th><th>Target</th><th>Ach%</th><th>Midpoint (R)</th><th>Share</th></tr>
+            </table>`;
         
-        let tableBody = card.querySelector('table');
+        let table = card.querySelector('table');
         ppl.forEach(p => {
-            p.streams.forEach((s, i) => { 
-                tableBody.innerHTML += `<tr class="stream-row">
-                    <td>${i===0 ? '<b>' + p.name + '</b>' : ''}&nbsp;&nbsp;↳ ${s.label}</td>
-                    <td>R${s.a.toFixed(2)}</td><td>R${s.t.toFixed(2)}</td><td>-</td><td>-</td><td>-</td></tr>`; 
+            p.streams.forEach((s, i) => {
+                table.innerHTML += `<tr class="stream-row"><td>${i===0 ? '<b>'+p.name+'</b>' : '&nbsp;&nbsp;↳ '+s.l}</td><td>R${s.a.toFixed(2)}</td><td>R${s.t.toFixed(2)}</td><td>-</td><td>-</td><td>-</td></tr>`;
             });
-
-            const rowId = `mid_${p.id.toString().replace(/\s/g, '_')}`;
-            tableBody.innerHTML += `<tr class="total-row">
+            table.innerHTML += `<tr class="total-row">
                 <td>INDIVIDUAL TOTAL</td><td>R${p.a.toFixed(2)}</td><td>R${p.t.toFixed(2)}</td>
                 <td>${(p.ach*100).toFixed(1)}%</td>
-                <td><input type="number" class="midpoint-input" id="${rowId}" value="1000" onchange="recalc('${uName}')"></td>
-                <td id="share_${p.id}">R0.00</td>
+                <td><input type="number" class="midpoint-input" data-unit="${uName}" data-pid="${p.id}" value="1000" oninput="runRecalc('${uName}')"></td>
+                <td class="share-cell" id="share_${uName}_${p.id}">R0.00</td>
             </tr>`;
         });
 
-        tableBody.innerHTML += `<tr class="unit-summary-row">
-            <td>UNIT SUMMARY</td><td>R${uA.toFixed(2)}</td><td>R${uT.toFixed(2)}</td><td>${achPct.toFixed(1)}%</td><td>-</td><td>-</td>
-        </tr>`;
-
+        table.innerHTML += `<tr class="unit-summary-row"><td>UNIT SUMMARY</td><td>R${uA.toFixed(2)}</td><td>R${uT.toFixed(2)}</td><td>${achPct.toFixed(1)}%</td><td>-</td><td>-</td></tr>`;
         document.getElementById('output').appendChild(card);
-        
-        // Initial share calculation for the unit
-        window.unitData = window.unitData || {};
-        window.unitData[uName] = { ppl, totalEligRev, pool };
-        recalc(uName);
+        runRecalc(uName);
     }
 
-    // Function to recalculate shares when midpoint changes
-    window.recalc = function(uName) {
-        const data = window.unitData[uName];
+    window.runRecalc = function(uName) {
+        const data = unitStore[uName];
+        if (!data) return;
+
         data.ppl.forEach(p => {
-            const midVal = cleanNum(document.getElementById(`mid_${p.id.toString().replace(/\s/g, '_')}`).value);
-            let s = (p.elig && data.totalEligRev > 0) ? (p.a / data.totalEligRev) * data.pool : 0;
-            const cap = midVal * 3.1;
-            if (s > cap) s = cap;
-            document.getElementById(`share_${p.id}`).innerText = `R${s.toFixed(2)}${!p.elig ? ' (Fail 75%)' : ''}`;
+            // Find the specific input for this person in this unit
+            const input = document.querySelector(`.midpoint-input[data-unit="${uName}"][data-pid="${p.id}"]`);
+            const mid = cleanNum(input.value);
+            
+            let share = (p.elig && data.totalEligRev > 0) ? (p.a / data.totalEligRev) * data.pool : 0;
+            const cap = mid * 3.1;
+            
+            if (share > cap) share = cap;
+            
+            const cell = document.getElementById(`share_${uName}_${p.id}`);
+            cell.innerText = `R${share.toFixed(2)}${!p.elig ? ' (Fail 75%)' : ''}`;
         });
-    }
+    };
 </script>
 </body>
 </html>
