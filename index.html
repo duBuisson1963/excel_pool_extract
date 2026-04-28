@@ -2,45 +2,45 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Commission Engine v2.5</title>
+    <title>Commission Engine v2.6</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
     <style>
         body { font-family: 'Segoe UI', sans-serif; margin: 30px; background-color: #f0f2f5; }
         .panel { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); margin-bottom: 20px; }
         .mapping-box { background: #fff3cd; padding: 15px; border: 1px solid #ffeeba; border-radius: 8px; margin-top: 15px; }
-        .mapping-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin: 10px 0; }
+        .mapping-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin: 15px 0; }
         .unit-card { background: white; border-radius: 8px; padding: 20px; margin-bottom: 25px; border-left: 6px solid #28a745; }
         table { width: 100%; border-collapse: collapse; margin-top: 15px; }
         th, td { border: 1px solid #dee2e6; padding: 8px; text-align: left; font-size: 0.85em; }
         .stream-row { color: #666; font-style: italic; background: #fafafa; }
         .total-row { background: #eee; font-weight: bold; }
         .disqualified { color: #dc3545; }
-        select { width: 100%; padding: 5px; }
-        button { padding: 10px 20px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; }
+        .version-info { font-weight: bold; color: #444; margin-bottom: 10px; }
+        select { width: 100%; padding: 5px; border: 1px solid #999; }
+        button { padding: 10px 20px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: bold; }
     </style>
 </head>
 <body>
 
 <div class="panel">
-    <h2>Commission Engine v2.5</h2>
+    <div class="version-info">VERSION NUMBER: 2.6</div>
+    <h2>Commission Allocation Engine</h2>
+    
     <div style="display:flex; gap:20px; align-items:flex-end;">
         <div>
             <label>Midpoint Target (R):</label><br>
             <input type="number" id="midpoint" value="1000" style="padding:8px;">
         </div>
-        <input type="file" id="fileInput" accept=".xlsx, .xls" />
+        <div>
+            <input type="file" id="fileInput" accept=".xlsx, .xls" />
+        </div>
     </div>
 
     <div id="mappingArea" class="mapping-box" style="display:none;">
-        <strong>Step 2: Map your columns (Zeros occur if these are wrong):</strong>
-        <div class="mapping-grid">
-            <div>ID:<select id="mID"></select></div>
-            <div>Name:<select id="mName"></select></div>
-            <div>Unit:<select id="mUnit"></select></div>
-            <div>Actual:<select id="mAct"></select></div>
-            <div>Target:<select id="mTar"></select></div>
-        </div>
-        <button id="runBtn" style="background:#28a745;">Process Data</button>
+        <strong>Step 2: Map Columns (Previewing First Values)</strong>
+        <div class="mapping-grid" id="mappingGrid">
+            </div>
+        <button id="runBtn" style="background:#28a745;">Process and Calculate</button>
     </div>
 </div>
 
@@ -49,11 +49,20 @@
 
 <script>
     let wb = null;
+    let sheetHeaders = [];
+    let firstRowData = {};
 
     function cleanNum(v) {
         if (!v) return 0;
         if (typeof v === 'number') return v;
-        let s = v.toString().replace(/[R\s\u00A0,]/g, (m) => m === ',' ? '.' : '');
+        // Strip R, spaces, and handle comma/dot decimals
+        let s = v.toString().replace(/[R\s\u00A0]/g, '');
+        if (s.includes(',') && s.includes('.')) {
+            if (s.lastIndexOf('.') > s.lastIndexOf(',')) s = s.replace(/,/g, '');
+            else s = s.replace(/\./g, '').replace(',', '.');
+        } else {
+            s = s.replace(',', '.');
+        }
         return parseFloat(s) || 0;
     }
 
@@ -62,20 +71,50 @@
         reader.onload = (ev) => {
             const data = new Uint8Array(ev.target.result);
             wb = XLSX.read(data, {type: 'array'});
-            const sheet = wb.Sheets[wb.SheetNames.find(n => n !== "Summary")];
-            const headers = XLSX.utils.sheet_to_json(sheet, {header: 1})[0];
             
-            ['mID', 'mName', 'mUnit', 'mAct', 'mTar'].forEach(id => {
-                const sel = document.getElementById(id);
-                sel.innerHTML = headers.map(h => `<option value="${h}">${h}</option>`).join('');
-            });
-            document.getElementById('mappingArea').style.display = 'block';
+            const dataSheetName = wb.SheetNames.find(n => n !== "Summary");
+            const sheet = wb.Sheets[dataSheetName];
+            const rows = XLSX.utils.sheet_to_json(sheet);
+            
+            if (rows.length > 0) {
+                sheetHeaders = Object.keys(rows[0]);
+                firstRowData = rows[0];
+                renderMappingUI();
+            }
         };
         reader.readAsArrayBuffer(e.target.files[0]);
     });
 
+    function renderMappingUI() {
+        const grid = document.getElementById('mappingGrid');
+        grid.innerHTML = "";
+        
+        const fields = [
+            { id: 'mID', label: 'Person Number (ID)' },
+            { id: 'mName', label: 'Full Name' },
+            { id: 'mUnit', label: 'Organisational Unit' },
+            { id: 'mAct', label: 'Actual Revenue' },
+            { id: 'mTar', label: 'Target Revenue' }
+        ];
+
+        fields.forEach(field => {
+            let options = sheetHeaders.map(h => `<option value="${h}">${h} (Value: ${firstRowData[h] ?? 'Empty'})</option>`).join('');
+            grid.innerHTML += `<div>
+                <label><strong>${field.label}:</strong></label>
+                <select id="${field.id}">${options}</select>
+            </div>`;
+        });
+        document.getElementById('mappingArea').style.display = 'block';
+    }
+
     document.getElementById('runBtn').addEventListener('click', () => {
-        const map = { id: document.getElementById('mID').value, name: document.getElementById('mName').value, unit: document.getElementById('mUnit').value, act: document.getElementById('mAct').value, tar: document.getElementById('mTar').value };
+        const map = { 
+            id: document.getElementById('mID').value, 
+            name: document.getElementById('mName').value, 
+            unit: document.getElementById('mUnit').value, 
+            act: document.getElementById('mAct').value, 
+            tar: document.getElementById('mTar').value 
+        };
         const mid = cleanNum(document.getElementById('midpoint').value);
         const out = document.getElementById('output');
         out.innerHTML = "";
@@ -94,11 +133,11 @@
                 return acc;
             }, {});
 
-            for (const u in unitGroups) render(u, unitGroups[u], map, mid);
+            for (const u in unitGroups) renderUnit(u, unitGroups[u], map, mid);
         });
     });
 
-    function render(uName, rows, map, mid) {
+    function renderUnit(uName, rows, map, mid) {
         const pData = rows.reduce((acc, r) => {
             const id = r[map.id];
             if (!acc[id]) acc[id] = { name: r[map.name], id, streams: [], a: 0, t: 0 };
@@ -110,7 +149,12 @@
 
         const ppl = Object.values(pData);
         let uA = 0, uT = 0;
-        ppl.forEach(p => { uA += p.a; uT += p.t; p.ach = p.t > 0 ? p.a / p.t : 0; p.elig = p.ach >= 0.75; p.w = p.elig ? p.a * p.ach : 0; });
+        ppl.forEach(p => { 
+            uA += p.a; uT += p.t; 
+            p.ach = p.t > 0 ? p.a / p.t : 0; 
+            p.elig = p.ach >= 0.75; 
+            p.w = p.elig ? p.a * p.ach : 0; 
+        });
 
         const ach = uT > 0 ? (uA / uT) * 100 : 0;
         const rate = ach >= 80 ? Math.min(0.05, 0.02 + (Math.floor(ach) - 80) * 0.0006) : 0;
@@ -119,13 +163,13 @@
 
         const div = document.createElement('div');
         div.className = 'unit-card';
-        div.innerHTML = `<h3>Unit: ${uName}</h3><p>Pool: R${pool.toFixed(2)} (${(rate*100).toFixed(2)}%)</p><table><tr><th>Name</th><th>Actual</th><th>Target</th><th>Achieve%</th><th>Share</th></tr>`;
+        div.innerHTML = `<h3>Unit: ${uName}</h3><p>Team Ach: ${ach.toFixed(1)}% | Pool: R${pool.toFixed(2)} (${(rate*100).toFixed(2)}%)</p><table><tr><th>Name</th><th>Actual</th><th>Target</th><th>Achieve%</th><th>Share</th></tr>`;
         
         ppl.forEach(p => {
-            p.streams.forEach((s, i) => { div.querySelector('table').innerHTML += `<tr class="stream-row"><td>${i===0 ? p.name : ''}</td><td>R${s.a.toFixed(2)}</td><td>R${s.t.toFixed(2)}</td><td>-</td><td>-</td></tr>`; });
+            p.streams.forEach((s, i) => { div.querySelector('table').innerHTML += `<tr class="stream-row"><td>${i===0 ? p.name + ' (' + p.id + ')' : ''}</td><td>R${s.a.toFixed(2)}</td><td>R${s.t.toFixed(2)}</td><td>-</td><td>-</td></tr>`; });
             let s = (p.elig && tw > 0) ? (p.w / tw) * pool : 0;
             if (s > mid * 3.1) s = mid * 3.1;
-            div.querySelector('table').innerHTML += `<tr class="total-row ${!p.elig?'disqualified':''}"><td>TOTAL</td><td>R${p.a.toFixed(2)}</td><td>R${p.t.toFixed(2)}</td><td>${(p.ach*100).toFixed(1)}%</td><td>R${s.toFixed(2)}</td></tr>`;
+            div.querySelector('table').innerHTML += `<tr class="total-row ${!p.elig?'disqualified':''}"><td>TOTAL FOR ${p.name}</td><td>R${p.a.toFixed(2)}</td><td>R${p.t.toFixed(2)}</td><td>${(p.ach*100).toFixed(1)}%</td><td>R${s.toFixed(2)}</td></tr>`;
         });
         document.getElementById('output').appendChild(div);
     }
